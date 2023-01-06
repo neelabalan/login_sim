@@ -1,0 +1,6 @@
+# only available in nightly
+
+# imports_granularity = "Item"
+# group_imports = "StdExternalCrate"
+# imports_layout = "Vertical"
+# blank_lines_lower_bound = 1
