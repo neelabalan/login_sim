@@ -6,35 +6,59 @@
 
 Simulation of regular login activity on a site and random activity from hackers using brute-force password guessing attacks. The login process involves a username and password and no additional validation.
 
-## Setup
-
-```shell
-# Once you clone the repository
-$ cargo run
-
-# To view usage
-$ cargo run -- --help
-```
 
 ## Usage
 
+The simulator reads configuration from a JSON file passed as a command-line argument.
+
+### Configuration File
+
+Create a `config.json` file with the following structure:
+
+```json
+{
+  "start_date": "2022-01-01 00:00:00",
+  "end_date": "2022-03-13 00:00:00",
+  "seed": 13,
+  "first_names": ["Kent", "Armando", ...],
+  "last_names": ["Daniels", "Holland", ...],
+  "output": {
+    "userbase": "data/userbase.json",
+    "logs": "logs/log.csv",
+    "attacks": "logs/attack.csv"
+  }
+}
 ```
-Usage: login_sim [OPTIONS]
 
-Options:
-      --days <DAYS>              Simualtion ranging from the start date [default: 30]
-      --start-date <START_DATE>  Expected format %Y-%m-%d %H:%M:%S [default: "2022-01-01 00:00:00"]
-      --seed <SEED>              [default: 13]
-      --ip <IP>                  [default: logs/ips.json]
-      --log <LOG>                [default: logs/log.csv]
-      --hacklog <HACKLOG>        [default: logs/attack.csv]
-  -h, --help                     Print help information
+- `start_date` and `end_date`: Simulation period in `%Y-%m-%d %H:%M:%S` format.
+- `seed`: Random seed for reproducibility.
+- `first_names` and `last_names`: Arrays of strings for generating user names.
+- `output`: Paths for output files.
+
+### Running the Simulator
+
+```shell
+cargo run -- config.json
 ```
 
-The `first_names.txt` and `last_names.txt` in present in `data/` folder. The names were sourced from [Random User Generator](https://randomuser.me)
+This will generate the simulation data and save it to the specified output paths.
 
+## Analysis
+
+The `notebook/anomaly_detection.ipynb` Jupyter notebook contains exploratory data analysis and anomaly detection algorithms to identify suspicious login activity from the generated logs.
+
+### Python Dependencies
+
+Dependencies are managed in `pyproject.toml`. Install with:
+
+```shell
+uv install
+# or
+uv sync
+```
 
 ## Assumptions
+
 The simulator makes the following assumptions about valid users of the website:
 
 - Valid users come according to a Poisson process with an hourly rate that depends on the day of the week and the time of day. A Poisson process models arrivals per unit time (hour here) as a Poisson distribution with mean λ (lambda) and the interarrival times are exponential distributed with mean 1/λ.
@@ -52,9 +76,10 @@ The simulator makes the following assumptions about the hackers:
 - Each hacker will use a single IP address, which is generated in the same way the valid user ones are. However, our simulator is capable of varying this IP address when `vary_ips=True` is passed to `simulate()`.
 - Although highly unlikely, it is possible the hacker has the same IP address as a valid user. The hacker may even be a valid user.
 
+## Performance
 
 > There are some obvious performance improvements
 
-> It takes **~900** ms to to simulate 30 days data and the same in Python takes **15 seconds** on 11th Gen Intel(R) Core(TM) i7-1165G7 @ 2.80GHz - 16 GB RAM
+> It takes **~900** ms to simulate 30 days data and the same in Python takes **15 seconds** on 11th Gen Intel(R) Core(TM) i7-1165G7 @ 2.80GHz - 16 GB RAM
 
 > I know that there is room for lot of performance improvement on both sides but this comparison gives some idea of what is possible
