@@ -34,11 +34,11 @@ pub fn assign_ip_address(users: Vec<String>, max_range: u8) -> HashMap<String, V
 }
 
 pub fn load_from_file(file_path: &str) -> Vec<String> {
-    return fs::read_to_string(file_path)
+    fs::read_to_string(file_path)
         .expect("Failed to read input")
         .split("\n")
         .map(|s| s.to_string()) // Convert &str to String
-        .collect();
+        .collect()
 }
 
 pub fn dump_csv<T: Serialize>(list: &Vec<T>, file_path: &str) -> Result<(), Box<dyn Error>> {
@@ -50,8 +50,8 @@ pub fn dump_csv<T: Serialize>(list: &Vec<T>, file_path: &str) -> Result<(), Box<
     Ok(())
 }
 pub fn dump_json(map: &HashMap<String, Vec<String>>, file_path: &str) -> std::io::Result<()> {
-	let json_string = serde_json::to_string(map)?;
-	fs::write(file_path, json_string)
+    let json_string = serde_json::to_string(map)?;
+    fs::write(file_path, json_string)
 }
 
 #[cfg(test)]
@@ -60,9 +60,8 @@ mod tests {
 
     #[test]
     fn test_assing_ip() {
-		let users = vec![format!("John"), format!("Green")];
-		let userbase = assign_ip_address(users, 3);
-        assert_eq!(userbase.get("John").unwrap().len()>1, true);
+        let users = vec![format!("John"), format!("Green")];
+        let userbase = assign_ip_address(users, 3);
+        assert_eq!(userbase.get("John").unwrap().len() > 1, true);
     }
-
 }

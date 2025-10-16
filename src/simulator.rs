@@ -15,9 +15,9 @@ const ATTEMPTS_BEFORE_LOCKOUT: usize = 3;
 
 #[derive(Debug, PartialEq, Serialize)]
 enum FailureReason {
-    ErrorAccountLocked,
-    ErrorWrongUsername,
-    ErrorWrongPassword,
+    AccountLocked,
+    WrongUsername,
+    WrongPassword,
 }
 
 #[derive(Debug, PartialEq, Serialize)]
@@ -59,7 +59,6 @@ impl<'a> Simulator<'a> {
         seed: u64,
         userbase: &'a HashMap<String, Vec<String>>,
     ) -> Self {
-        let mut rng = StdRng::seed_from_u64(seed);
         Self {
             start_date,
             days,
@@ -70,13 +69,13 @@ impl<'a> Simulator<'a> {
             logs: vec![],
             attacks: vec![],
             locked_accounts: vec![],
-            rng,
+            rng: StdRng::seed_from_u64(seed),
         }
     }
     pub fn simulate(&mut self, attack_prob: f64, try_all_users_prob: f64, vary_ips: bool) {
         let hours_range = &self.get_hour_range().unwrap();
-        let start = NaiveDateTime::parse_from_str(&self.start_date, "%Y-%m-%d %H:%M:%S").unwrap();
-        let mut user_list: Vec<String> = self.userbase.keys().cloned().collect();
+        let start = NaiveDateTime::parse_from_str(self.start_date, "%Y-%m-%d %H:%M:%S").unwrap();
+        let user_list: Vec<String> = self.userbase.keys().cloned().collect();
 
         // info!("User list {:?}", user_list);
         info!("Hours range {}", hours_range);
@@ -111,7 +110,7 @@ impl<'a> Simulator<'a> {
             let (hourly_arrivals, interarrival_times) = Simulator::valid_user_arrivals(current);
             let random_user = user_list.choose(&mut self.rng).unwrap();
             for index in 0..hourly_arrivals as usize {
-                current = current + Duration::minutes(interarrival_times[index] as i64);
+                current += Duration::minutes(interarrival_times[index] as i64);
                 current = self.valid_user_attempts_login(&mut current, random_user.clone());
             }
             info!("Log {:?}", self.logs.last());
@@ -119,19 +118,18 @@ impl<'a> Simulator<'a> {
         }
     }
     fn get_random_user_ip(&mut self, user_name: &String) -> String {
-        return self
-            .userbase
+        self.userbase
             .get(user_name)
             .unwrap()
             .choose(&mut self.rng)
             .unwrap()
-            .to_string();
+            .to_string()
     }
     fn valid_user_arrivals(when: NaiveDateTime) -> (f64, Vec<f64>) {
         let is_weekday = ![Weekday::Sat, Weekday::Sun].contains(&when.weekday());
         let late_night = when.hour() < 5 || when.hour() >= 11;
         let work_time = is_weekday && (when.hour() >= 9 || when.hour() <= 17);
-        let mut poisson_lambda: f64 = 0.0;
+        let poisson_lambda: f64;
         if work_time {
             let tri_distr = Triangular::new(1.5, 5.0, 2.75).unwrap();
             poisson_lambda = tri_distr.sample(&mut rand::thread_rng());
@@ -157,7 +155,7 @@ impl<'a> Simulator<'a> {
         random_user: String,
     ) -> NaiveDateTime {
         let source_ip = self.get_random_user_ip(&random_user);
-		debug!("{}-{}", random_user, source_ip);
+        debug!("{}-{}", random_user, source_ip);
         let normal_distr = Normal::new(1.01, 0.01).unwrap();
         return self.attempt_login(
             current,
@@ -182,7 +180,7 @@ impl<'a> Simulator<'a> {
         // simulate attack from random hacker
         user_list.shuffle(&mut self.rng); // user list is shuffled
         let hacker_ip = utils::get_random_ip(&mut self.rng);
-        let mut last_when = when.clone();
+        let mut last_when = when;
         for user in user_list {
             let new_ip = utils::get_random_ip(&mut self.rng);
             last_when = self.hacker_attempts_login(
@@ -203,8 +201,8 @@ impl<'a> Simulator<'a> {
         let normal = Normal::new(0.35, 0.5).unwrap();
         return self.attempt_login(
             when,
-            &source_ip,
-            &username,
+            source_ip,
+            username,
             normal.sample(&mut rand::thread_rng()),
             self.attacker_success_probs.clone(), // TODO: need to remove clone
         );
@@ -234,7 +232,7 @@ impl<'a> Simulator<'a> {
                         source_ip: source_ip.clone(),
                         username: login_user.clone(),
                         success: false,
-                        failure_reason: Some(FailureReason::ErrorWrongUsername),
+                        failure_reason: Some(FailureReason::WrongUsername),
                     });
                     if self.rng.gen::<f64>() <= username_accuracy {
                         login_user = username.clone();
@@ -256,7 +254,7 @@ impl<'a> Simulator<'a> {
                         source_ip: source_ip.clone(),
                         username: login_user.clone(),
                         success: false,
-                        failure_reason: Some(FailureReason::ErrorWrongPassword),
+                        failure_reason: Some(FailureReason::WrongPassword),
                     })
                 }
             }
@@ -266,7 +264,7 @@ impl<'a> Simulator<'a> {
                 source_ip: source_ip.clone(),
                 username: login_user.clone(),
                 success: false,
-                failure_reason: Some(FailureReason::ErrorAccountLocked),
+                failure_reason: Some(FailureReason::AccountLocked),
             })
         }
         if self.rng.gen::<f64>() >= 0.5 {
@@ -281,7 +279,7 @@ impl<'a> Simulator<'a> {
             distorted_username.remove(index);
             distorted_username
         } else {
-            let random_char = self.rng.gen_range('a'..'z');
+            let random_char = self.rng.gen_range('a'..='z');
             distorted_username.insert(index, random_char);
             distorted_username
         }
