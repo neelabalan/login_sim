@@ -1,5 +1,8 @@
-use clap::Parser;
-use itertools::iproduct;
+use std::collections::HashMap;
+use std::env;
+use std::fs;
+use serde::{Deserialize, Serialize};
+use chrono::{NaiveDateTime};
 
 mod simulator;
 mod utils;
@@ -13,49 +16,44 @@ macro_rules! vec_of_strings {
     ($($x:expr),*) => (vec![$($x.to_string()),*]);
 }
 
-#[derive(Parser, Debug)]
-#[command(author, about, long_about = None)]
-struct Args {
-    #[arg(
-        long,
-        default_value_t = 30,
-        help = "Simualtion ranging from the start date"
-    )]
-    days: u64,
-
-    #[arg(long, default_value_t=format!("2022-01-01 00:00:00"), help="Expected format %Y-%m-%d %H:%M:%S")]
+#[derive(Serialize, Deserialize)]
+struct Config {
     start_date: String,
-
-    #[arg(long, default_value_t = 13)]
+    end_date: String,
     seed: u64,
-
-    // filepath
-    #[arg(long, default_value_t=format!("logs/ips.json"))]
-    ip: String,
-
-    // filepath
-    #[arg(long, default_value_t=format!("logs/log.csv"))]
-    log: String,
-
-    // file path
-    #[arg(long, default_value_t=format!("logs/attack.csv"))]
-    hacklog: String,
+    first_names: Vec<String>,
+    last_names: Vec<String>,
+    output: HashMap<String, String>
 }
 
-
 fn main() -> std::io::Result<()> {
-    let args = Args::parse();
-    let first_names = utils::load_from_file("data/first_names.txt");
-    let last_names = utils::load_from_file("data/last_names.txt");
+    let args: Vec<String> = env::args().collect();
+    if args.len() < 2 {
+        panic!("Usage: {} <config.json>", args[0]);
+    }
+    let config_file = &args[1];
+    let config_content = fs::read_to_string(config_file).expect("Unable to read config file");
+    let config: Config = serde_json::from_str(&config_content).expect("Unable to parse config file");
+
+    let first_names = config.first_names;
+    let last_names = config.last_names;
+
+    let start = NaiveDateTime::parse_from_str(&config.start_date, "%Y-%m-%d %H:%M:%S").unwrap();
+    let end = NaiveDateTime::parse_from_str(&config.end_date, "%Y-%m-%d %H:%M:%S").unwrap();
+    let days = (end - start).num_days() as u64;
+
     let env = Env::default()
         .filter_or("MY_LOG_LEVEL", "trace")
         .write_style_or("MY_LOG_STYLE", "always");
 
     env_logger::init_from_env(env);
 
-    let mut user_list: Vec<String> = iproduct!(first_names, last_names)
-        .map(|(first_name, last_name)| format!("{}{}", first_name, last_name))
-        .collect();
+    let mut user_list: Vec<String> = Vec::new();
+    for first in &first_names {
+        for last in &last_names {
+            user_list.push(format!("{}{}", first, last));
+        }
+    }
     let roles = vec_of_strings!["admin", "dba", "master"];
 
     user_list.extend(roles);
@@ -65,17 +63,18 @@ fn main() -> std::io::Result<()> {
     // 	info!("ip for AlexHarvey - {}", get_random_user_ip(&userbase, &"AlexHanson".to_string()));
     // }
     let mut simulator: simulator::Simulator = simulator::Simulator::new(
-        args.start_date.as_str(),
-        args.days,
+        &config.start_date,
+        days,
         vec![0.25, 0.45],
         vec![0.87, 0.93, 0.95],
-        args.seed,
+        config.seed,
         &userbase,
     );
     simulator.simulate(0.1, 0.2, false);
 
-    utils::dump_json(&simulator.userbase, &args.ip)?;
-    let _ = utils::dump_csv(&simulator.logs, &args.log);
-    let _ = utils::dump_csv(&simulator.attacks, &args.hacklog);
+    utils::dump_json(&simulator.userbase, config.output.get("userbase").unwrap().as_str())?;
+    let _ = utils::dump_json(&simulator.logs, config.output.get("logs").unwrap().as_str());
+    let _ = utils::dump_json(&simulator.attacks, config.output.get("attacks").unwrap().as_str());
+
     Ok(())
 }

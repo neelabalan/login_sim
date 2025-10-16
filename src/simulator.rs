@@ -156,14 +156,13 @@ impl<'a> Simulator<'a> {
     ) -> NaiveDateTime {
         let source_ip = self.get_random_user_ip(&random_user);
         debug!("{}-{}", random_user, source_ip);
-        let normal_distr = Normal::new(1.01, 0.01).unwrap();
-        return self.attempt_login(
+        self.attempt_login(
             current,
             &source_ip,
             &random_user,
-            normal_distr.sample(&mut rand::thread_rng()),
+            Normal::new(1.01, 0.01).unwrap().sample(&mut rand::thread_rng()),
             self.valid_user_success_probs.clone(),
-        );
+        )
     }
     fn get_hour_range(&self) -> Result<i64, ParseError> {
         let start = NaiveDateTime::parse_from_str(self.start_date, "%Y-%m-%d %H:%M:%S")?;
@@ -186,7 +185,7 @@ impl<'a> Simulator<'a> {
             last_when = self.hacker_attempts_login(
                 &mut last_when,
                 if vary_ips { &new_ip } else { &hacker_ip },
-                &user,
+                user,
             );
         }
         return (hacker_ip, last_when);
@@ -225,7 +224,7 @@ impl<'a> Simulator<'a> {
         if !self.locked_accounts.contains(&login_user) {
             let tries = success_likelihoods.len();
             for index in 0..cmp::min(tries, ATTEMPTS_BEFORE_LOCKOUT) {
-                *when = *when + Duration::seconds(1);
+                *when += Duration::seconds(1);
                 if !user_list.contains(&login_user) {
                     self.logs.push(Log {
                         datetime: when.to_string(),

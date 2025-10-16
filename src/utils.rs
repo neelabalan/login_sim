@@ -3,7 +3,6 @@ use rand::{Rng, SeedableRng};
 use serde::Serialize;
 
 use std::collections::HashMap;
-use std::error::Error;
 use std::fs;
 
 pub fn get_random_ip(rng: &mut StdRng) -> String {
@@ -33,24 +32,9 @@ pub fn assign_ip_address(users: Vec<String>, max_range: u8) -> HashMap<String, V
     user_info
 }
 
-pub fn load_from_file(file_path: &str) -> Vec<String> {
-    fs::read_to_string(file_path)
-        .expect("Failed to read input")
-        .split("\n")
-        .map(|s| s.to_string()) // Convert &str to String
-        .collect()
-}
 
-pub fn dump_csv<T: Serialize>(list: &Vec<T>, file_path: &str) -> Result<(), Box<dyn Error>> {
-    let mut writer = csv::Writer::from_path(file_path)?;
-    for record in list {
-        writer.serialize(record)?;
-    }
-    writer.flush()?;
-    Ok(())
-}
-pub fn dump_json(map: &HashMap<String, Vec<String>>, file_path: &str) -> std::io::Result<()> {
-    let json_string = serde_json::to_string(map)?;
+pub fn dump_json<T: Serialize>(data: &T, file_path: &str) -> std::io::Result<()> {
+    let json_string = serde_json::to_string(data)?;
     fs::write(file_path, json_string)
 }
 

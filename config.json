@@ -1,0 +1,44 @@
+{
+  "start_date": "2022-01-01 00:00:00",
+  "end_date": "2022-01-13 00:00:00",
+  "seed": 13,
+  "first_names": [
+    "Kent",
+    "Armando",
+    "Chad",
+    "Kurt",
+    "Dale",
+    "Gavin",
+    "Paul",
+    "Dan",
+    "Caleb",
+    "Rafael",
+    "Zack",
+    "Mathew",
+    "Kirk",
+    "Luis",
+    "Victor"
+  ],
+  "last_names": [
+    "Daniels",
+    "Holland",
+    "Lambert",
+    "Fleming",
+    "Craig",
+    "Rhodes",
+    "Curtis",
+    "Mitchell",
+    "Gardner",
+    "Lawson",
+    "Welch",
+    "Powell",
+    "Wallace",
+    "Ray",
+    "Pearson"
+  ],
+  "output": {
+    "userbase": "logs/ips.json",
+    "logs": "logs/logs.json",
+    "attacks": "logs/attacks.json"
+  }
+}
