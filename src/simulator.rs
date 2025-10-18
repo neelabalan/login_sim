@@ -110,7 +110,7 @@ impl LoginSimulation for LoginSimulator {
         let seed = config.seed;
 
         Self {
-            config: config,
+            config,
             rng: StdRng::seed_from_u64(seed),
             userbase: LoginSimulator::build_userbase(&user_dataset),
             logs: vec![],
@@ -165,7 +165,8 @@ impl LoginSimulation for LoginSimulator {
                     let username_accuracy = Normal::new(1.01, 0.01)
                         .unwrap()
                         .sample(&mut rand::thread_rng());
-                    current = self.attempt_login(&mut current, &random_user.name, username_accuracy)
+                    let source_ip = random_user.ips.choose(&mut self.rng).unwrap().to_string();
+                    current = self.attempt_login(&mut current, &random_user.name, username_accuracy, source_ip);
                 }
             }
             info!("log {:?}", self.logs.last());
@@ -186,7 +187,7 @@ impl LoginSimulator {
 
             user_info.push(User {
                 name: user,
-                ips: ips,
+                ips,
             })
         }
         user_info
@@ -222,14 +223,14 @@ impl LoginSimulator {
         for _user in user_list {
             let new_ip = utils::get_random_ip(&mut self.rng);
             let source_ip = if self.config.vary_ips {
-                &new_ip
+                new_ip.clone()
             } else {
-                &hacker_ip
+                hacker_ip.clone()
             };
             let username_accuracy = Normal::new(0.35, 0.5)
                 .unwrap()
                 .sample(&mut rand::thread_rng());
-            last_when = self.attempt_login(&mut last_when, source_ip, username_accuracy);
+            last_when = self.attempt_login(&mut last_when, &_user.name, username_accuracy, source_ip);
         }
         return (hacker_ip, last_when);
     }
@@ -239,6 +240,7 @@ impl LoginSimulator {
         when: &mut NaiveDateTime,
         username: &str,
         username_accuracy: f64,
+        source_ip: String
     ) -> NaiveDateTime {
         let mut login_user = username.to_string();
         if self.rng.gen::<f64>() > username_accuracy {
@@ -258,7 +260,7 @@ impl LoginSimulator {
         }
 
         if let Some(user) = self.userbase.iter().find(|u| u.name == login_user) {
-            let source_ip = user.ips.choose(&mut self.rng).unwrap().to_string();
+            // let source_ip = user.ips.choose(&mut self.rng).unwrap().to_string();
             let success_probs = &self.config.valid_user_success_probabilities;
 
             for index in 0..cmp::min(success_probs.len(), constants::ATTEMPTS_BEFORE_LOCKOUT) {
@@ -267,7 +269,7 @@ impl LoginSimulator {
                 if self.rng.gen::<f64>() as f32 <= success_probs[index] {
                     self.logs.push(Log {
                         datetime: when.to_string(),
-                        source_ip: source_ip.clone(),
+                        source_ip: source_ip,
                         username: login_user.clone(),
                         success: true,
                         failure_reason: None,
