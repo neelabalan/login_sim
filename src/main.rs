@@ -1,29 +1,22 @@
-use std::collections::HashMap;
+use chrono::NaiveDateTime;
 use std::env;
 use std::fs;
-use serde::{Deserialize, Serialize};
-use chrono::{NaiveDateTime};
 
+mod config;
 mod simulator;
 mod utils;
+mod constants;
 
 #[macro_use]
 extern crate log;
 
+use config::Config;
 use env_logger::Env;
+
+use crate::simulator::LoginSimulation;
 
 macro_rules! vec_of_strings {
     ($($x:expr),*) => (vec![$($x.to_string()),*]);
-}
-
-#[derive(Serialize, Deserialize)]
-struct Config {
-    start_date: String,
-    end_date: String,
-    seed: u64,
-    first_names: Vec<String>,
-    last_names: Vec<String>,
-    output: HashMap<String, String>
 }
 
 fn main() -> std::io::Result<()> {
@@ -33,7 +26,8 @@ fn main() -> std::io::Result<()> {
     }
     let config_file = &args[1];
     let config_content = fs::read_to_string(config_file).expect("Unable to read config file");
-    let config: Config = serde_json::from_str(&config_content).expect("Unable to parse config file");
+    let config: Config =
+        serde_json::from_str(&config_content).expect("Unable to parse config file");
 
     let first_names = config.first_names;
     let last_names = config.last_names;
@@ -58,23 +52,20 @@ fn main() -> std::io::Result<()> {
 
     user_list.extend(roles);
 
-    let userbase = utils::assign_ip_address(user_list, 3);
-    // for _ in 0..100 {
-    // 	info!("ip for AlexHarvey - {}", get_random_user_ip(&userbase, &"AlexHanson".to_string()));
-    // }
-    let mut simulator: simulator::Simulator = simulator::Simulator::new(
-        &config.start_date,
-        days,
-        vec![0.25, 0.45],
-        vec![0.87, 0.93, 0.95],
-        config.seed,
-        &userbase,
-    );
-    simulator.simulate(0.1, 0.2, false);
+    let mut simulator = simulator::LoginSimulator::new(config);
+    let _ = simulator.run();
 
-    utils::dump_json(&simulator.userbase, config.output.get("userbase").unwrap().as_str())?;
+    // FIX
+
+    utils::dump_json(
+        &simulator.userbase,
+        config.output.get("userbase").unwrap().as_str(),
+    )?;
     let _ = utils::dump_json(&simulator.logs, config.output.get("logs").unwrap().as_str());
-    let _ = utils::dump_json(&simulator.attacks, config.output.get("attacks").unwrap().as_str());
+    let _ = utils::dump_json(
+        &simulator.attacks,
+        config.output.get("attacks").unwrap().as_str(),
+    );
 
     Ok(())
 }
