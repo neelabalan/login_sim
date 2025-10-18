@@ -2,6 +2,8 @@
   "start_date": "2022-01-01 00:00:00",
   "end_date": "2022-01-13 00:00:00",
   "seed": 13,
+  "attack_probability": 0.1,
+  "vary_ips": true,
   "first_names": [
     "Kent",
     "Armando",
@@ -35,6 +37,47 @@
     "Wallace",
     "Ray",
     "Pearson"
+  ],
+  "attacker_success_probabilities": [0.25, 0.45],
+  "valid_user_success_probabilities": [0.87, 0.93, 0.95],
+  "time_periods": [
+    {
+      "name": "work_hours",
+      "days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+      "hour_range": "9..17",
+      "distribution": {
+        "type": "Triangular",
+        "params": {
+          "min": 1.5,
+          "max": 5.0,
+          "mode": 2.75
+        }
+      }
+    },
+    {
+      "name": "evening",
+      "days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+      "hour_range": "17..23",
+      "distribution": {
+        "type": "Uniform",
+        "params": {
+          "min": 0.0,
+          "max": 5.0
+        }
+      }
+    },
+    {
+      "name": "off_hours",
+      "days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+      "hour_range": "23..9",
+      "distribution": {
+        "type": "Uniform",
+        "params": {
+          "min": 1.5,
+          "max": 4.25
+        }
+      }
+    }
   ],
   "output": {
     "userbase": "logs/ips.json",

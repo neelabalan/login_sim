@@ -1,5 +1,3 @@
-use chrono::format::ParseError;
-use chrono::{Datelike, Days, Timelike, Weekday};
 use chrono::{Duration, NaiveDateTime};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -7,11 +5,10 @@ use rand::{Rng, SeedableRng};
 use rand_distr::{Distribution, Exp, Normal, Poisson, Triangular, Uniform};
 use serde::Serialize;
 use std::cmp;
-use std::collections::HashMap;
 
+use crate::config;
+use crate::constants;
 use crate::utils;
-
-const ATTEMPTS_BEFORE_LOCKOUT: usize = 3;
 
 #[derive(Debug, PartialEq, Serialize)]
 enum FailureReason {
@@ -37,211 +34,242 @@ pub struct Attack {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct Simulator<'a> {
-    start_date: &'a str,
-    days: u64,
-    attacker_success_probs: Vec<f64>,
-    valid_user_success_probs: Vec<f64>,
-    seed: u64,
-    locked_accounts: Vec<String>,
+pub struct LoginSimulator {
+    config: config::Config,
+    userbase: Vec<User>,
     rng: StdRng,
-    pub userbase: &'a HashMap<String, Vec<String>>,
-    pub logs: Vec<Log>,
-    pub attacks: Vec<Attack>,
+    logs: Vec<Log>,
+    attacks: Vec<Attack>,
+    locked_accounts: Vec<User>,
+}
+pub struct UserDataset {
+    first_names: Vec<String>,
+    last_names: Vec<String>,
 }
 
-impl<'a> Simulator<'a> {
-    pub fn new(
-        start_date: &'a str,
-        days: u64,
-        attacker_success_probs: Vec<f64>,
-        valid_user_success_probs: Vec<f64>,
-        seed: u64,
-        userbase: &'a HashMap<String, Vec<String>>,
-    ) -> Self {
+#[derive(Debug, PartialEq, Clone, Serialize)]
+pub struct User {
+    name: String,
+    ips: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub enum DistributionType {
+    Triangular { min: f32, mode: f32, max: f32 },
+    Uniform { min: f32, max: f32 },
+    Normal { mean: f32, std_dev: f32 },
+    Exponential { lambda: f32 },
+}
+
+impl DistributionType {
+    pub fn sample_from_config(
+        distribution: &config::Distribution,
+        rng: &mut StdRng,
+    ) -> Result<f32, String> {
+        match distribution.dist_type.to_lowercase().as_str() {
+            "triangular" => {
+                let dist = Triangular::new(
+                    distribution.params["min"],
+                    distribution.params["max"],
+                    distribution.params["mode"],
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(dist.sample(rng))
+            }
+            "uniform" => {
+                let dist = Uniform::new(distribution.params["min"], distribution.params["max"]);
+                Ok(dist.sample(rng))
+            }
+            "normal" => {
+                let dist = Normal::new(distribution.params["mean"], distribution.params["std_dev"])
+                    .map_err(|e| e.to_string())?;
+                Ok(dist.sample(rng))
+            }
+            "exponential" => {
+                let dist = Exp::new(distribution.params["lambda"]).map_err(|e| e.to_string())?;
+                Ok(dist.sample(rng))
+            }
+            _ => Err(format!("Unknown distribution: {}", distribution.dist_type)),
+        }
+    }
+}
+
+pub trait LoginSimulation {
+    fn new(config: config::Config) -> Self;
+    fn build_userbase(user_dataset: &UserDataset) -> Vec<User>;
+    fn run(self) -> Self;
+}
+
+impl LoginSimulation for LoginSimulator {
+    fn new(config: config::Config) -> Self {
+        let user_dataset = UserDataset {
+            first_names: config.first_names.clone(),
+            last_names: config.last_names.clone(),
+        };
+        let seed = config.seed;
+
         Self {
-            start_date,
-            days,
-            attacker_success_probs,
-            valid_user_success_probs,
-            seed,
-            userbase,
+            config,
+            rng: StdRng::seed_from_u64(seed),
+            userbase: LoginSimulator::build_userbase(&user_dataset),
             logs: vec![],
             attacks: vec![],
             locked_accounts: vec![],
-            rng: StdRng::seed_from_u64(seed),
         }
     }
-    pub fn simulate(&mut self, attack_prob: f64, try_all_users_prob: f64, vary_ips: bool) {
-        let hours_range = &self.get_hour_range().unwrap();
-        let start = NaiveDateTime::parse_from_str(self.start_date, "%Y-%m-%d %H:%M:%S").unwrap();
-        let user_list: Vec<String> = self.userbase.keys().cloned().collect();
 
-        // info!("User list {:?}", user_list);
-        info!("Hours range {}", hours_range);
+    fn build_userbase(user_dataset: &UserDataset) -> Vec<User> {
+        let mut user_list: Vec<String> = Vec::new();
+        for first in &user_dataset.first_names {
+            for last in &user_dataset.last_names {
+                user_list.push(format!("{}{}", first, last));
+            }
+        }
+        return LoginSimulator::assign_ip_address(user_list, 3);
+    }
+
+    fn run(mut self) -> Self {
+        let hours_range = self.config.get_hour_range().unwrap();
+        let start =
+            NaiveDateTime::parse_from_str(self.config.start_date.as_str(), constants::DATE_FORMAT)
+                .unwrap();
+
+        info!("hours range {}", hours_range);
         for offset in 0..hours_range + 1 {
             let mut current = start + Duration::hours(offset);
-            if self.rng.gen::<f64>() < attack_prob {
+            if self.rng.gen::<f32>() < self.config.attack_probability {
                 let attack_start = current + Duration::minutes(self.rng.gen_range(0..60));
 
-                let mut random_user_list: Vec<String> =
-                    if self.rng.gen::<f64>() < try_all_users_prob {
-                        user_list.clone() // unaffected
-                    } else {
-                        let mut temp_rng = rand::thread_rng();
-                        let temp_user_list = user_list.clone();
-                        temp_user_list
-                            .choose_multiple(&mut self.rng, temp_rng.gen_range(0..user_list.len()))
-                            .collect::<Vec<&String>>()
-                            .into_iter()
-                            .map(|s| s.to_owned())
-                            .collect()
-                    };
+                let subset_size = self.rng.gen_range(1..cmp::max(2, self.userbase.len() / 5));
+                let mut random_user_list: Vec<User> = self
+                    .userbase
+                    .choose_multiple(&mut self.rng, subset_size)
+                    .cloned()
+                    .collect();
 
                 let (source_ip, end_time) =
-                    self.hack(attack_start, &mut random_user_list, vary_ips);
+                    self.generate_attack_events(attack_start, &mut random_user_list);
                 self.attacks.push(Attack {
                     start: attack_start.to_string(),
                     end: end_time.to_string(),
                     source_ip: source_ip,
                 });
             }
-            info!("Current time {}", current.to_string());
-            let (hourly_arrivals, interarrival_times) = Simulator::valid_user_arrivals(current);
-            let random_user = user_list.choose(&mut self.rng).unwrap();
-            for index in 0..hourly_arrivals as usize {
-                current += Duration::minutes(interarrival_times[index] as i64);
-                current = self.valid_user_attempts_login(&mut current, random_user.clone());
+            info!("current time {}", current.to_string());
+            let (hourly_arrivals, interarrival_times) = self.generate_valid_user_logins(current);
+            if let Some(random_user) = self.userbase.choose(&mut self.rng) {
+                let random_user = random_user.clone();
+                for index in 0..hourly_arrivals as usize {
+                    current += Duration::minutes(interarrival_times[index] as i64);
+                    let username_accuracy = Normal::new(1.01, 0.01)
+                        .unwrap()
+                        .sample(&mut rand::thread_rng());
+                    let source_ip = random_user.ips.choose(&mut self.rng).unwrap().to_string();
+                    current = self.attempt_login(&mut current, &random_user.name, username_accuracy, source_ip);
+                }
             }
-            info!("Log {:?}", self.logs.last());
-            info!("Attack {:?}", self.attacks.last());
+            info!("log {:?}", self.logs.last());
+            info!("attack {:?}", self.attacks.last());
         }
+        self
     }
-    fn get_random_user_ip(&mut self, user_name: &String) -> String {
-        self.userbase
-            .get(user_name)
-            .unwrap()
-            .choose(&mut self.rng)
-            .unwrap()
-            .to_string()
+}
+
+impl LoginSimulator {
+    fn assign_ip_address(users: Vec<String>, max_range: u8) -> Vec<User> {
+        let mut user_info = Vec::new();
+        let mut rng = StdRng::seed_from_u64(13);
+        for user in users {
+            let ips = (0..rng.gen_range(1..max_range + 1))
+                .map(|_| utils::get_random_ip(&mut rng))
+                .collect::<Vec<_>>();
+
+            user_info.push(User {
+                name: user,
+                ips,
+            })
+        }
+        user_info
     }
-    fn valid_user_arrivals(when: NaiveDateTime) -> (f64, Vec<f64>) {
-        let is_weekday = ![Weekday::Sat, Weekday::Sun].contains(&when.weekday());
-        let late_night = when.hour() < 5 || when.hour() >= 11;
-        let work_time = is_weekday && (when.hour() >= 9 || when.hour() <= 17);
-        let poisson_lambda: f64;
-        if work_time {
-            let tri_distr = Triangular::new(1.5, 5.0, 2.75).unwrap();
-            poisson_lambda = tri_distr.sample(&mut rand::thread_rng());
-        } else if late_night {
-            let uniform_distr = Uniform::new(0.0, 5.0);
-            poisson_lambda = uniform_distr.sample(&mut rand::thread_rng());
+
+    fn generate_valid_user_logins(&mut self, when: NaiveDateTime) -> (f64, Vec<f64>) {
+        let time_period = self.config.get_time_period(when).ok().flatten();
+        let poisson_lambda: f64 = if let Some(period) = time_period {
+            let sample = DistributionType::sample_from_config(&period.distribution, &mut self.rng);
+            sample.unwrap_or(2.0) as f64
         } else {
-            let uniform_distr = Uniform::new(1.5, 4.25);
-            poisson_lambda = uniform_distr.sample(&mut rand::thread_rng());
-        }
-        let poisson_distr = Poisson::new(poisson_lambda).unwrap();
-        let hourly_arrivals = poisson_distr.sample(&mut rand::thread_rng());
-        let exp_distr = Exp::new(1.0 / poisson_lambda).unwrap();
-        let interarrival_times: Vec<f64> = exp_distr
+            2.0 // fallback default
+        };
+        let hourly_arrivals = Poisson::new(poisson_lambda)
+            .unwrap()
+            .sample(&mut rand::thread_rng());
+        let interarrival_times: Vec<f64> = Exp::new(1.0 / poisson_lambda)
+            .unwrap()
             .sample_iter(&mut rand::thread_rng())
             .take(hourly_arrivals as usize)
             .collect();
         return (hourly_arrivals, interarrival_times);
     }
-    fn valid_user_attempts_login(
-        &mut self,
-        current: &mut NaiveDateTime,
-        random_user: String,
-    ) -> NaiveDateTime {
-        let source_ip = self.get_random_user_ip(&random_user);
-        debug!("{}-{}", random_user, source_ip);
-        self.attempt_login(
-            current,
-            &source_ip,
-            &random_user,
-            Normal::new(1.01, 0.01).unwrap().sample(&mut rand::thread_rng()),
-            self.valid_user_success_probs.clone(),
-        )
-    }
-    fn get_hour_range(&self) -> Result<i64, ParseError> {
-        let start = NaiveDateTime::parse_from_str(self.start_date, "%Y-%m-%d %H:%M:%S")?;
-        let end = start.checked_add_days(Days::new(self.days)).unwrap();
 
-        Ok((end - start).num_hours())
-    }
-    fn hack(
+    fn generate_attack_events(
         &mut self,
         when: NaiveDateTime,
-        user_list: &mut Vec<String>,
-        vary_ips: bool,
+        user_list: &mut Vec<User>,
     ) -> (String, NaiveDateTime) {
-        // simulate attack from random hacker
-        user_list.shuffle(&mut self.rng); // user list is shuffled
+        user_list.shuffle(&mut self.rng);
         let hacker_ip = utils::get_random_ip(&mut self.rng);
         let mut last_when = when;
-        for user in user_list {
+        for _user in user_list {
             let new_ip = utils::get_random_ip(&mut self.rng);
-            last_when = self.hacker_attempts_login(
-                &mut last_when,
-                if vary_ips { &new_ip } else { &hacker_ip },
-                user,
-            );
+            let source_ip = if self.config.vary_ips {
+                new_ip.clone()
+            } else {
+                hacker_ip.clone()
+            };
+            let username_accuracy = Normal::new(0.35, 0.5)
+                .unwrap()
+                .sample(&mut rand::thread_rng());
+            last_when = self.attempt_login(&mut last_when, &_user.name, username_accuracy, source_ip);
         }
         return (hacker_ip, last_when);
     }
-    fn hacker_attempts_login(
-        &mut self,
-        when: &mut NaiveDateTime,
-        source_ip: &String,
-        username: &String,
-    ) -> NaiveDateTime {
-        // mean stdev
-        let normal = Normal::new(0.35, 0.5).unwrap();
-        return self.attempt_login(
-            when,
-            source_ip,
-            username,
-            normal.sample(&mut rand::thread_rng()),
-            self.attacker_success_probs.clone(), // TODO: need to remove clone
-        );
-    }
+
     fn attempt_login(
         &mut self,
         when: &mut NaiveDateTime,
-        source_ip: &String,
-        username: &String,
+        username: &str,
         username_accuracy: f64,
-        success_likelihoods: Vec<f64>,
+        source_ip: String
     ) -> NaiveDateTime {
-        let user_list: Vec<String> = self.userbase.keys().cloned().collect();
-        let mut login_user = username.clone();
+        let mut login_user = username.to_string();
         if self.rng.gen::<f64>() > username_accuracy {
-            // Incorrect username is taken
             login_user = self.distort_username(login_user);
-            info!("Distorted username - {}", login_user);
+            info!("distorted username - {}", login_user);
         }
-        if !self.locked_accounts.contains(&login_user) {
-            let tries = success_likelihoods.len();
-            for index in 0..cmp::min(tries, ATTEMPTS_BEFORE_LOCKOUT) {
+
+        if self.locked_accounts.iter().any(|u| u.name == login_user) {
+            self.logs.push(Log {
+                datetime: when.to_string(),
+                source_ip: String::new(),
+                username: login_user.clone(),
+                success: false,
+                failure_reason: Some(FailureReason::AccountLocked),
+            });
+            return *when;
+        }
+
+        if let Some(user) = self.userbase.iter().find(|u| u.name == login_user) {
+            // let source_ip = user.ips.choose(&mut self.rng).unwrap().to_string();
+            let success_probs = &self.config.valid_user_success_probabilities;
+
+            for index in 0..cmp::min(success_probs.len(), constants::ATTEMPTS_BEFORE_LOCKOUT) {
                 *when += Duration::seconds(1);
-                if !user_list.contains(&login_user) {
+
+                if self.rng.gen::<f64>() as f32 <= success_probs[index] {
                     self.logs.push(Log {
                         datetime: when.to_string(),
-                        source_ip: source_ip.clone(),
-                        username: login_user.clone(),
-                        success: false,
-                        failure_reason: Some(FailureReason::WrongUsername),
-                    });
-                    if self.rng.gen::<f64>() <= username_accuracy {
-                        login_user = username.clone();
-                    }
-                    continue;
-                }
-                if self.rng.gen::<f64>() <= success_likelihoods[index] {
-                    self.logs.push(Log {
-                        datetime: when.to_string(),
-                        source_ip: source_ip.clone(),
+                        source_ip: source_ip,
                         username: login_user.clone(),
                         success: true,
                         failure_reason: None,
@@ -254,22 +282,36 @@ impl<'a> Simulator<'a> {
                         username: login_user.clone(),
                         success: false,
                         failure_reason: Some(FailureReason::WrongPassword),
-                    })
+                    });
+
+                    if index == constants::ATTEMPTS_BEFORE_LOCKOUT - 1 {
+                        self.locked_accounts.push(user.clone());
+                        info!(
+                            "Account {} locked after {} failed attempts",
+                            login_user,
+                            constants::ATTEMPTS_BEFORE_LOCKOUT
+                        );
+                    }
                 }
             }
         } else {
             self.logs.push(Log {
                 datetime: when.to_string(),
-                source_ip: source_ip.clone(),
+                source_ip: String::new(),
                 username: login_user.clone(),
                 success: false,
-                failure_reason: Some(FailureReason::AccountLocked),
-            })
+                failure_reason: Some(FailureReason::WrongUsername),
+            });
         }
-        if self.rng.gen::<f64>() >= 0.5 {
-            self.locked_accounts.pop();
+
+        // randomly unlock an account
+        if !self.locked_accounts.is_empty() && self.rng.gen::<f64>() >= 0.5 {
+            if let Some(unlocked_user) = self.locked_accounts.pop() {
+                info!("Account {} unlocked", unlocked_user.name);
+            }
         }
-        return when.clone();
+
+        *when
     }
     fn distort_username(&mut self, username: String) -> String {
         let mut distorted_username = username.clone(); // avoid mutable borrows
@@ -282,5 +324,44 @@ impl<'a> Simulator<'a> {
             distorted_username.insert(index, random_char);
             distorted_username
         }
+    }
+
+    pub fn dump_userbase(&self) -> std::io::Result<()> {
+        let output_path = self.config.output.get("userbase").ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "userbase output path not configured",
+            )
+        })?;
+
+        utils::dump_json(&self.userbase, output_path)?;
+        info!("userbase dumped to {}", output_path);
+        Ok(())
+    }
+
+    pub fn dump_attacks(&self) -> std::io::Result<()> {
+        let output_path = self.config.output.get("attacks").ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "attacks output path not configured",
+            )
+        })?;
+
+        utils::dump_json(&self.attacks, output_path)?;
+        info!("attacks dumped to {}", output_path);
+        Ok(())
+    }
+
+    pub fn dump_logs(&self) -> std::io::Result<()> {
+        let output_path = self.config.output.get("logs").ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "logs output path not configured",
+            )
+        })?;
+
+        utils::dump_json(&self.logs, output_path)?;
+        info!("logs dumped to {}", output_path);
+        Ok(())
     }
 }
