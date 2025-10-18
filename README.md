@@ -7,33 +7,73 @@
 Simulation of regular login activity on a site and random activity from hackers using brute-force password guessing attacks. The login process involves a username and password and no additional validation.
 
 
-## Usage
+## Architecture
 
-The simulator reads configuration from a JSON file passed as a command-line argument.
+The simulator uses a **config-driven design** for flexibility and extensibility:
+
 
 ### Configuration File
 
-Create a `config.json` file with the following structure:
+Create a `config.json` file with time periods and distributions:
 
 ```json
 {
   "start_date": "2022-01-01 00:00:00",
-  "end_date": "2022-03-13 00:00:00",
+  "end_date": "2022-01-03 00:00:00",
   "seed": 13,
-  "first_names": ["Kent", "Armando", ...],
-  "last_names": ["Daniels", "Holland", ...],
+  "first_names": ["Kent", "Armando"],
+  "last_names": ["Daniels", "Holland"],
   "output": {
-    "userbase": "data/userbase.json",
-    "logs": "logs/log.csv",
-    "attacks": "logs/attack.csv"
-  }
+    "userbase": "logs/userbase.json",
+    "logs": "logs/log.json",
+    "attacks": "logs/attack.json"
+  },
+  "attack_probability": 0.3,
+  "vary_ips": false,
+  "valid_user_success_probabilities": [0.95, 0.98, 0.99],
+  "attacker_success_probabilities": [0.1, 0.15, 0.2],
+  "time_periods": [
+    {
+      "name": "work_hours",
+      "days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+      "hour_range": "9..17",
+      "distribution": {
+        "type": "triangular",
+        "params": {"min": 1.5, "mode": 2.75, "max": 5.0}
+      }
+    },
+    {
+      "name": "evening",
+      "days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+      "hour_range": "17..23",
+      "distribution": {
+        "type": "uniform",
+        "params": {"min": 1.5, "max": 4.25}
+      }
+    },
+    {
+      "name": "off_hours",
+      "days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+      "hour_range": "23..9",
+      "distribution": {
+        "type": "uniform",
+        "params": {"min": 0.0, "max": 5.0}
+      }
+    }
+  ]
 }
 ```
 
-- `start_date` and `end_date`: Simulation period in `%Y-%m-%d %H:%M:%S` format.
-- `seed`: Random seed for reproducibility.
-- `first_names` and `last_names`: Arrays of strings for generating user names.
-- `output`: Paths for output files.
+**Configuration Fields:**
+- `start_date` / `end_date`: Simulation period (`%Y-%m-%d %H:%M:%S`)
+- `seed`: Random seed for reproducibility
+- `first_names` / `last_names`: User name components
+- `output`: Paths for JSON exports
+- `attack_probability`: Probability of attack per hour
+- `vary_ips`: Whether attackers use different IPs per attempt
+- `valid_user_success_probabilities`: Success rates for each login attempt
+- `attacker_success_probabilities`: Success rates for attacker attempts
+- `time_periods`: Array of time windows with distributions
 
 ### Running the Simulator
 
@@ -41,11 +81,14 @@ Create a `config.json` file with the following structure:
 cargo run -- config.json
 ```
 
-This will generate the simulation data and save it to the specified output paths.
+Outputs:
+- `logs/userbase.json` - All valid users with IPs
+- `logs/log.json` - All login attempts (success/failure)
+- `logs/attack.json` - Attack metadata
 
 ## Analysis
 
-The `notebook/anomaly_detection.ipynb` Jupyter notebook contains exploratory data analysis and anomaly detection algorithms to identify suspicious login activity from the generated logs.
+The `anomaly_detection.ipynb` Jupyter notebook contains exploratory data analysis and anomaly detection algorithms to identify suspicious login activity from the generated logs.
 
 ### Python Dependencies
 
