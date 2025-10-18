@@ -40,19 +40,21 @@ pub struct LoginSimulator {
     rng: StdRng,
     logs: Vec<Log>,
     attacks: Vec<Attack>,
+    locked_accounts: Vec<User>,
 }
 pub struct UserDataset {
     first_names: Vec<String>,
     last_names: Vec<String>,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize)]
 pub struct User {
     name: String,
     ips: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum DistributionType {
     Triangular { min: f32, mode: f32, max: f32 },
     Uniform { min: f32, max: f32 },
@@ -113,6 +115,7 @@ impl LoginSimulation for LoginSimulator {
             userbase: LoginSimulator::build_userbase(&user_dataset),
             logs: vec![],
             attacks: vec![],
+            locked_accounts: vec![],
         }
     }
 
@@ -145,7 +148,8 @@ impl LoginSimulation for LoginSimulator {
                     .cloned()
                     .collect();
 
-                let (source_ip, end_time) = self.hack(attack_start, &mut random_user_list);
+                let (source_ip, end_time) =
+                    self.generate_attack_events(attack_start, &mut random_user_list);
                 self.attacks.push(Attack {
                     start: attack_start.to_string(),
                     end: end_time.to_string(),
@@ -153,7 +157,7 @@ impl LoginSimulation for LoginSimulator {
                 });
             }
             info!("current time {}", current.to_string());
-            let (hourly_arrivals, interarrival_times) = self.valid_user_arrivals(current);
+            let (hourly_arrivals, interarrival_times) = self.generate_valid_user_logins(current);
             if let Some(random_user) = self.userbase.choose(&mut self.rng) {
                 let random_user = random_user.clone();
                 for index in 0..hourly_arrivals as usize {
@@ -161,11 +165,7 @@ impl LoginSimulation for LoginSimulator {
                     let username_accuracy = Normal::new(1.01, 0.01)
                         .unwrap()
                         .sample(&mut rand::thread_rng());
-                    current = self.attempt_login(
-                        &mut current,
-                        &random_user.name,
-                        username_accuracy,
-                    )
+                    current = self.attempt_login(&mut current, &random_user.name, username_accuracy)
                 }
             }
             info!("log {:?}", self.logs.last());
@@ -192,11 +192,7 @@ impl LoginSimulator {
         user_info
     }
 
-    fn get_random_user_ip(&mut self, user: &User) -> String {
-        user.ips.choose(&mut self.rng).unwrap().to_string()
-    }
-
-    fn valid_user_arrivals(&mut self, when: NaiveDateTime) -> (f64, Vec<f64>) {
+    fn generate_valid_user_logins(&mut self, when: NaiveDateTime) -> (f64, Vec<f64>) {
         let time_period = self.config.get_time_period(when).ok().flatten();
         let poisson_lambda: f64 = if let Some(period) = time_period {
             let sample = DistributionType::sample_from_config(&period.distribution, &mut self.rng);
@@ -215,9 +211,12 @@ impl LoginSimulator {
         return (hourly_arrivals, interarrival_times);
     }
 
-    fn hack(&mut self, when: NaiveDateTime, user_list: &mut Vec<User>) -> (String, NaiveDateTime) {
-        // simulate attack from random hacker
-        user_list.shuffle(&mut self.rng); // user list is shuffled
+    fn generate_attack_events(
+        &mut self,
+        when: NaiveDateTime,
+        user_list: &mut Vec<User>,
+    ) -> (String, NaiveDateTime) {
+        user_list.shuffle(&mut self.rng);
         let hacker_ip = utils::get_random_ip(&mut self.rng);
         let mut last_when = when;
         for _user in user_list {
@@ -243,11 +242,73 @@ impl LoginSimulator {
     ) -> NaiveDateTime {
         let mut login_user = username.to_string();
         if self.rng.gen::<f64>() > username_accuracy {
-            // Incorrect username is taken
             login_user = self.distort_username(login_user);
             info!("distorted username - {}", login_user);
         }
-        // TODO: implement locked_accounts check and login logic
+
+        if self.locked_accounts.iter().any(|u| u.name == login_user) {
+            self.logs.push(Log {
+                datetime: when.to_string(),
+                source_ip: String::new(),
+                username: login_user.clone(),
+                success: false,
+                failure_reason: Some(FailureReason::AccountLocked),
+            });
+            return *when;
+        }
+
+        if let Some(user) = self.userbase.iter().find(|u| u.name == login_user) {
+            let source_ip = user.ips.choose(&mut self.rng).unwrap().to_string();
+            let success_probs = &self.config.valid_user_success_probabilities;
+
+            for index in 0..cmp::min(success_probs.len(), constants::ATTEMPTS_BEFORE_LOCKOUT) {
+                *when += Duration::seconds(1);
+
+                if self.rng.gen::<f64>() as f32 <= success_probs[index] {
+                    self.logs.push(Log {
+                        datetime: when.to_string(),
+                        source_ip: source_ip.clone(),
+                        username: login_user.clone(),
+                        success: true,
+                        failure_reason: None,
+                    });
+                    break;
+                } else {
+                    self.logs.push(Log {
+                        datetime: when.to_string(),
+                        source_ip: source_ip.clone(),
+                        username: login_user.clone(),
+                        success: false,
+                        failure_reason: Some(FailureReason::WrongPassword),
+                    });
+
+                    if index == constants::ATTEMPTS_BEFORE_LOCKOUT - 1 {
+                        self.locked_accounts.push(user.clone());
+                        info!(
+                            "Account {} locked after {} failed attempts",
+                            login_user,
+                            constants::ATTEMPTS_BEFORE_LOCKOUT
+                        );
+                    }
+                }
+            }
+        } else {
+            self.logs.push(Log {
+                datetime: when.to_string(),
+                source_ip: String::new(),
+                username: login_user.clone(),
+                success: false,
+                failure_reason: Some(FailureReason::WrongUsername),
+            });
+        }
+
+        // randomly unlock an account
+        if !self.locked_accounts.is_empty() && self.rng.gen::<f64>() >= 0.5 {
+            if let Some(unlocked_user) = self.locked_accounts.pop() {
+                info!("Account {} unlocked", unlocked_user.name);
+            }
+        }
+
         *when
     }
     fn distort_username(&mut self, username: String) -> String {
@@ -261,5 +322,44 @@ impl LoginSimulator {
             distorted_username.insert(index, random_char);
             distorted_username
         }
+    }
+
+    pub fn dump_userbase(&self) -> std::io::Result<()> {
+        let output_path = self.config.output.get("userbase").ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "userbase output path not configured",
+            )
+        })?;
+
+        utils::dump_json(&self.userbase, output_path)?;
+        info!("userbase dumped to {}", output_path);
+        Ok(())
+    }
+
+    pub fn dump_attacks(&self) -> std::io::Result<()> {
+        let output_path = self.config.output.get("attacks").ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "attacks output path not configured",
+            )
+        })?;
+
+        utils::dump_json(&self.attacks, output_path)?;
+        info!("attacks dumped to {}", output_path);
+        Ok(())
+    }
+
+    pub fn dump_logs(&self) -> std::io::Result<()> {
+        let output_path = self.config.output.get("logs").ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "logs output path not configured",
+            )
+        })?;
+
+        utils::dump_json(&self.logs, output_path)?;
+        info!("logs dumped to {}", output_path);
+        Ok(())
     }
 }
